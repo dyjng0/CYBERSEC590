@@ -1,0 +1,9 @@
+[project]
+name = "dual-provider-langfuse-lab-runner"
+version = "0.1.0"
+description = "Student tracing lab with Ollama Cloud or Duke AI Gateway"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false
