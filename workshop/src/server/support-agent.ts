@@ -6,6 +6,8 @@ import { env, provider } from "./env";
 import { requireProviderKey } from "./provider-config";
 import { getSupportContext } from "./support-data";
 import { TOOL_DEFINITIONS, executeTool } from "./tools";
+import { observeOpenAI } from "@langfuse/openai";
+import { observe } from "@langfuse/tracing";
 
 export const SYSTEM_PROMPT = `You are Dad IT Support Agent.
 You are talking directly to Dad. He opened this chat himself to get help with his iPhone.
@@ -24,15 +26,17 @@ Rules:
 `;
 
 function toOpenAIMessages(
-  messages: ChatMessage[]
+  messages: ChatMessage[],
 ): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
   return messages.map((message) => ({
     role: message.role,
-    content: message.content
+    content: message.content,
   }));
 }
 
-function readAssistantText(message: OpenAI.Chat.Completions.ChatCompletionMessage) {
+function readAssistantText(
+  message: OpenAI.Chat.Completions.ChatCompletionMessage,
+) {
   if (typeof message.content === "string") {
     return message.content.trim();
   }
@@ -51,34 +55,50 @@ function parseToolArguments(argumentsText: string) {
   }
 }
 
-export async function runSupportConversation(request: ChatRequest): Promise<ChatResponse> {
+async function runSupportConversationInner(
+  request: ChatRequest,
+): Promise<ChatResponse> {
   const context = getSupportContext();
   requireProviderKey(provider);
-  const signal = AbortSignal.any([AbortSignal.timeout(env.chatTimeoutMs), shutdownController.signal]);
-  const openai = new OpenAI({ apiKey: env.openaiApiKey, baseURL: env.openaiBaseUrl, timeout: env.chatTimeoutMs, maxRetries: 0 });
-
+  const signal = AbortSignal.any([
+    AbortSignal.timeout(env.chatTimeoutMs),
+    shutdownController.signal,
+  ]);
+  const openai = observeOpenAI(
+    new OpenAI({
+      apiKey: env.openaiApiKey,
+      baseURL: env.openaiBaseUrl,
+      timeout: env.chatTimeoutMs,
+      maxRetries: 0,
+    }),
+  );
   const transcript: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: SYSTEM_PROMPT },
-    ...toOpenAIMessages(request.messages)
+    ...toOpenAIMessages(request.messages),
   ];
   const usedTools = new Set<string>();
   let finalAnswer = "";
 
   for (let attempt = 0; attempt < 6; attempt += 1) {
-    const response = await openai.chat.completions.create({
-      model: env.openaiModel,
-      messages: transcript,
-      tools: TOOL_DEFINITIONS,
-      tool_choice: "auto",
-      max_tokens: 2048
-    }, { signal });
+    const response = await openai.chat.completions.create(
+      {
+        model: env.openaiModel,
+        messages: transcript,
+        tools: TOOL_DEFINITIONS,
+        tool_choice: "auto",
+        max_tokens: 2048,
+      },
+      { signal },
+    );
 
     assertCompleteResponse(response);
     const message = response.choices[0]?.message;
     if (!message) {
       throw new Error(`${provider.label} returned no assistant message.`);
     }
-    transcript.push(message as OpenAI.Chat.Completions.ChatCompletionMessageParam);
+    transcript.push(
+      message as OpenAI.Chat.Completions.ChatCompletionMessageParam,
+    );
 
     const toolCalls = message.tool_calls ?? [];
     if (toolCalls.length === 0) {
@@ -91,19 +111,24 @@ export async function runSupportConversation(request: ChatRequest): Promise<Chat
       const parsedArguments = parseToolArguments(toolCall.function.arguments);
       const result =
         parsedArguments === null
-          ? { ok: false, error: `The tool arguments for ${toolCall.function.name} must be a valid JSON object.` }
+          ? {
+              ok: false,
+              error: `The tool arguments for ${toolCall.function.name} must be a valid JSON object.`,
+            }
           : await executeTool(toolCall.function.name, parsedArguments);
       if (result.ok === true) usedTools.add(toolCall.function.name);
       transcript.push({
         role: "tool",
         tool_call_id: toolCall.id,
-        content: JSON.stringify(result)
+        content: JSON.stringify(result),
       });
     }
   }
 
   if (!finalAnswer) {
-    throw new Error("The model did not finish an answer within six steps. Try a shorter question or another tool-capable model.");
+    throw new Error(
+      "The model did not finish an answer within six steps. Try a shorter question or another tool-capable model.",
+    );
   }
 
   return {
@@ -113,8 +138,12 @@ export async function runSupportConversation(request: ChatRequest): Promise<Chat
       contextId: context.id,
       contextLabel: context.label,
       model: env.openaiModel,
-      provider: provider.label
-    }
+      provider: provider.label,
+    },
   };
 }
 
+export const runSupportConversation = observe(runSupportConversationInner, {
+  name: "dad-it-support-chat-turn",
+  asType: "agent",
+});

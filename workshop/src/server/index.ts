@@ -10,8 +10,20 @@ import type { ChatRequest } from "../shared/types";
 import { runSupportConversation } from "./support-agent";
 import { env, provider, isLangfuseConfigured } from "./env";
 import { DEFAULT_SUPPORT_CONTEXT } from "./support-data";
+import { NodeSDK } from "@opentelemetry/sdk-node";
+import { LangfuseSpanProcessor } from "@langfuse/otel";
 
-// Tracing exercise: initialize the Langfuse exporter here (STUDENT-LAB.md, step 1).
+const langfuseSpanProcessor = isLangfuseConfigured()
+  ? new LangfuseSpanProcessor({
+      publicKey: env.langfusePublicKey,
+      secretKey: env.langfuseSecretKey,
+      baseUrl: env.langfuseBaseUrl,
+    })
+  : undefined;
+const sdk = langfuseSpanProcessor
+  ? new NodeSDK({ spanProcessors: [langfuseSpanProcessor] })
+  : undefined;
+sdk?.start();
 const instanceId = randomUUID();
 let busy = false;
 
@@ -24,10 +36,10 @@ const requestSchema = z.object({
         id: z.string(),
         role: z.union([z.literal("user"), z.literal("assistant")]),
         content: z.string().min(1),
-        timestamp: z.string()
-      })
+        timestamp: z.string(),
+      }),
     )
-    .min(1)
+    .min(1),
 });
 
 const app = express();
@@ -40,7 +52,7 @@ app.get("/api/health", (_request, response) => {
     instanceId,
     modelCredentialsPresent: provider.credentialsPresent,
     model: env.openaiModel,
-    langfuseCredentialsPresent: isLangfuseConfigured()
+    langfuseCredentialsPresent: isLangfuseConfigured(),
   });
 });
 
@@ -49,7 +61,14 @@ app.get("/api/support-context", (_request, response) => {
 });
 
 app.post("/api/chat", async (request, response) => {
-  if (busy) { response.status(429).send("Another question is being answered. Please wait for it to finish."); return; }
+  if (busy) {
+    response
+      .status(429)
+      .send(
+        "Another question is being answered. Please wait for it to finish.",
+      );
+    return;
+  }
   busy = true;
   try {
     const payload = requestSchema.parse(request.body) as ChatRequest;
@@ -71,7 +90,9 @@ app.use((_request, response) => {
 });
 
 const server = app.listen(env.port, "127.0.0.1", () => {
-  console.log(`Dad IT Support Agent server listening on http://127.0.0.1:${env.port}`);
+  console.log(
+    `Dad IT Support Agent server listening on http://127.0.0.1:${env.port}`,
+  );
 });
 
 let shuttingDown = false;
@@ -83,7 +104,8 @@ async function shutdown() {
   watchdog.unref();
   try {
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    // Tracing exercise: flush the exporter and shut down the SDK here.
+    await langfuseSpanProcessor?.forceFlush();
+    await sdk?.shutdown();
   } catch {
     console.error("Shutdown could not finish cleanly. Check the server logs.");
     process.exitCode = 1;
