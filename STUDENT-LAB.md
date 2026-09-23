@@ -12,11 +12,17 @@ Keep the original learning sequence:
 
 You will edit `workshop/src/server/index.ts`, `support-agent.ts`, and `tools.ts`. The code blocks below are changes for you to apply, not changes already present. They follow the original workshop's guided implementation format. Keep the provider settings, request timeout, tool behavior, and shutdown logic intact.
 
+**Screenshot guide:** The three Langfuse trace screenshots are reference examples from the [original Langfuse learner lesson](https://langfuse.com/workshop/learner/02-tracing), credited to the Langfuse team. Their OpenAI/GPT model names, timings, token counts, and prices are not required results for this Ollama/Duke adaptation. Compare the observation structure and report your own run; missing cost data is not zero cost.
+
 ## Before coding: establish the baseline
 
 Complete README setup and run the provider probe. Add your own Langfuse project keys and correct region URL to `workshop/.env`. Start the app and send “How do I turn Bluetooth on on my iPhone?” Confirm it answers. **No Langfuse trace is expected at this point**, even with valid project keys.
 
 Use fictional questions. After you add tracing, prompts, answers, and tool results will be sent to your Langfuse project.
+
+![The adapted Dad IT Support Agent app with Ollama Cloud selected](docs/images/ollama-app-baseline.png)
+
+Local Ollama app: check the selected provider/model, greeting, question buttons, and iPhone panel. “Keys present” only describes configuration; it does not confirm trace delivery.
 
 ## Step 1 — Record model generations
 
@@ -77,6 +83,10 @@ uv run lab.py restart
 
 Send a **new** Bluetooth question through the app. Wait briefly, then refresh your Langfuse project's recent traces. Look for model generation observations with prompts, responses, durations, and usage when reported. At this stage generations are not yet grouped under a single agent parent. The command-line provider probe intentionally does not create traces.
 
+![Langfuse generation observation before an agent parent is added](docs/images/02-tracing-step-1.png)
+
+Step 1 — a model generation appears on its own. Inspect its input, output, latency, and reported usage. Tools listed in the generation panel are not separate observations of tool execution. Screenshot credit: Langfuse workshop.
+
 ## Step 2 — Group generations under one agent turn
 
 In `workshop/src/server/support-agent.ts`, add:
@@ -109,6 +119,10 @@ export const runSupportConversation = observe(runSupportConversationInner, {
 The server continues importing `runSupportConversation` as before. Its argument becomes the agent input and its return value becomes the output.
 
 **Check:** run `check`, restart, and ask a fresh question. Find the matching `dad-it-support-chat-turn` trace. Model generations should now be children of one AGENT observation. Merely seeing a tool request in a model response does not yet mean the actual tool execution has its own observation.
+
+![Langfuse agent parent with three nested model generation observations](docs/images/02-tracing-step-2.png)
+
+Step 2 — dad-it-support-chat-turn groups the generations under one agent parent. The left trace tree does not yet contain separate tool observations. Screenshot credit: Langfuse workshop.
 
 ## Step 3 — Record tool executions
 
@@ -185,6 +199,10 @@ Run `check`, restart, and send a new Bluetooth question. In Langfuse, match its 
 - The agent input contains the chat request; its output contains the answer.
 
 Generation counts can vary. A model may choose tools inconsistently; distinguish that behavior from missing instrumentation. The header reports model request status and whether project keys are present. Only the matching trace in Langfuse confirms delivery.
+
+![Langfuse trace tree with agent, model generations, and both tool observations](docs/images/02-tracing-step-3.png)
+
+Step 3 — the left trace tree contains the agent, model generations, get_support_context, and search_help_library. Select a TOOL observation to inspect its actual results. This upstream example uses a WhatsApp question; your question and generation count may differ. Screenshot credit: Langfuse workshop.
 
 ## Explain what you built
 
